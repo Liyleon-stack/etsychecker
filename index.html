@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Etsy Risk Checker Pro</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://app.lemonsqueezy.com/js/lemon.js" defer></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; max-width: 750px; margin: 40px auto; padding: 20px; background: #fafafa; color: #333; }
@@ -13,9 +15,10 @@
     .card { background: white; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     textarea { width: 100%; padding: 12px; font-size: 14px; border: 1px solid #ddd; border-radius: 6px; resize: vertical; font-family: inherit; }
     .btn-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
-    .btn { padding: 10px 20px; font-size: 15px; cursor: pointer; border: none; border-radius: 6px; font-weight: 500; transition: all 0.2s; }
+    .btn { padding: 10px 20px; font-size: 15px; cursor: pointer; border: none; border-radius: 6px; font-weight: 500; }
     .btn-primary { background: #4CAF50; color: white; }
     .btn-primary:hover { background: #43A047; }
+    .btn-secondary { background: #f0f0f0; color: #333; }
     .btn:disabled { background: #ccc; cursor: not-allowed; }
     .result-box { background: #f9fafb; border: 1px solid #e5e7eb; padding: 20px; margin-top: 20px; border-radius: 8px; }
     .result-box pre { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; max-width: 100%; font-size: 14px; line-height: 1.7; }
@@ -23,9 +26,30 @@
     .tro-alert strong { color: #d97706; }
     .warning { color: #e74c3c; font-weight: bold; }
     .remaining { color: #666; font-size: 14px; }
+    .user-bar { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 14px; }
+    .user-bar a { color: #4CAF50; cursor: pointer; text-decoration: underline; }
+    .upgrade-banner { background: #eff6ff; border: 1px solid #3b82f6; padding: 16px; border-radius: 8px; margin-top: 16px; text-align: center; }
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; }
+    .modal-content { background: white; padding: 30px; border-radius: 12px; max-width: 400px; width: 90%; text-align: center; }
+    .modal-content input { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+    .modal-content .btn { margin-top: 12px; width: 100%; }
+    .history-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    .history-table th, .history-table td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+    .history-table th { background: #f9fafb; }
   </style>
 </head>
 <body>
+
+<div class="user-bar">
+  <span id="userInfo" style="display:none;">
+    <span id="userPlanBadge" style="background:#e5e7eb;padding:2px 8px;border-radius:10px;font-size:12px;">Free</span>
+    <span id="userEmail" style="margin-left:8px;"></span>
+    <a onclick="logout()" style="margin-left:8px;color:#999;font-size:12px;">Sign Out</a>
+  </span>
+  <span id="loginArea">
+    <a onclick="showLoginModal()">🔐 Sign In / Register</a>
+  </span>
+</div>
 
 <div class="header">
   <h1>🛡️ Etsy Infringement Risk Checker Pro</h1>
@@ -42,42 +66,178 @@
 
 <div id="result"></div>
 
+<div class="card" id="historyCard" style="display:none;">
+  <h3 style="margin-bottom:12px;">📋 Your Recent Checks</h3>
+  <table class="history-table">
+    <thead><tr><th>Date</th><th>Query</th><th>Risk</th></tr></thead>
+    <tbody id="historyBody"></tbody>
+  </table>
+</div>
+
+<div class="upgrade-banner" id="upgradeBanner" style="display:none;">
+  <strong>🚀 Upgrade to Pro</strong>
+  <p style="margin:8px 0;">Unlimited checks · History tracking · Priority support</p>
+  <button class="btn btn-primary" onclick="startCheckout()">Upgrade for $9/month</button>
+</div>
+
+<!-- Login Modal -->
+<div class="modal" id="loginModal">
+  <div class="modal-content">
+    <h3>🔐 Sign In or Register</h3>
+    <p style="color:#666;font-size:13px;margin:8px 0;">Enter your email to get started</p>
+    <input type="email" id="authEmail" placeholder="your@email.com">
+    <input type="password" id="authPassword" placeholder="Password (min 6 characters)">
+    <button class="btn btn-primary" onclick="handleLogin()">Continue</button>
+    <p style="font-size:12px;color:#999;margin-top:8px;">New user? We'll create your account automatically.</p>
+    <button class="btn btn-secondary" onclick="closeLoginModal()" style="margin-top:4px;">Cancel</button>
+  </div>
+</div>
+
 <script>
 // ==================== CONFIG ====================
 const API_PROXY_URL = "https://project-cw8do.vercel.app/api/etsy-check";
+const SUPABASE_URL = "https://ztokkpfpixswbtvsvaiu.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_meYuhMgATDYLN2-hHytoIQ_HFxC---";
+const LEMONSQUEEZY_STORE_ID = "358707";
+
+let supabase = null;
+let currentUser = null;
+const MAX_FREE_PER_DAY = 5;
+
+// ==================== SUPABASE INIT ====================
+function initSupabase() {
+  if (SUPABASE_URL.includes("你的项目")) return;
+  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  checkSession();
+}
+
+async function checkSession() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) { currentUser = session.user; showLoggedIn(); }
+}
+
+async function handleLogin() {
+  const email = document.getElementById("authEmail").value.trim();
+  const password = document.getElementById("authPassword").value.trim();
+  if (!email || !password || password.length < 6) {
+    alert("Please enter a valid email and password (min 6 characters).");
+    return;
+  }
+  let { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error && error.message.includes("Invalid login credentials")) {
+    await supabase.auth.signUp({ email, password });
+    const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+    if (loginError) { alert("Login failed. Please try again."); return; }
+    data = loginData;
+  } else if (error) { alert("Login failed: " + error.message); return; }
+  currentUser = data.user;
+  closeLoginModal();
+  showLoggedIn();
+}
+
+function showLoggedIn() {
+  document.getElementById("loginArea").style.display = "none";
+  document.getElementById("userInfo").style.display = "inline";
+  document.getElementById("userEmail").innerText = currentUser.email;
+  syncSubscription();
+  loadHistory();
+  updateRemainingDisplay();
+}
+
+async function logout() {
+  await supabase.auth.signOut();
+  currentUser = null;
+  document.getElementById("loginArea").style.display = "inline";
+  document.getElementById("userInfo").style.display = "none";
+  document.getElementById("historyCard").style.display = "none";
+  document.getElementById("upgradeBanner").style.display = "none";
+  updateRemainingDisplay();
+}
+
+function showLoginModal() { document.getElementById("loginModal").style.display = "flex"; }
+function closeLoginModal() { document.getElementById("loginModal").style.display = "none"; }
+
+// ==================== SUBSCRIPTION ====================
+async function syncSubscription() {
+  if (!supabase || !currentUser) return;
+  const { data } = await supabase.from("subscriptions").select("*").eq("user_id", currentUser.id).single();
+  if (data) {
+    const plan = data.plan || "free";
+    document.getElementById("userPlanBadge").innerText = plan === "pro" ? "Pro" : "Free";
+    if (plan === "pro") {
+      document.getElementById("upgradeBanner").style.display = "none";
+    }
+  }
+}
+
+// ==================== DAILY 5 FREE ====================
+async function getRemainingToday() {
+  if (currentUser && supabase) {
+    const { data } = await supabase.from("subscriptions").select("*").eq("user_id", currentUser.id).single();
+    if (data) {
+      const today = new Date().toISOString().split("T")[0];
+      if (data.last_check_date !== today) {
+        await supabase.from("subscriptions").update({ checks_used_today: 0, last_check_date: today }).eq("user_id", currentUser.id);
+        return MAX_FREE_PER_DAY;
+      }
+      if (data.plan === "pro") return Infinity;
+      return Math.max(0, MAX_FREE_PER_DAY - (data.checks_used_today || 0));
+    }
+  }
+  const today = new Date().toISOString().split("T")[0];
+  const lastDate = localStorage.getItem("etsy_last_date");
+  if (lastDate !== today) {
+    localStorage.setItem("etsy_last_date", today);
+    localStorage.setItem("etsy_checker_count", MAX_FREE_PER_DAY.toString());
+    return MAX_FREE_PER_DAY;
+  }
+  const count = parseInt(localStorage.getItem("etsy_checker_count") || MAX_FREE_PER_DAY.toString());
+  return Math.max(0, count);
+}
+
+async function useOneCheck() {
+  if (currentUser && supabase) {
+    await supabase.rpc("increment_check_count", { uid: currentUser.id });
+  } else {
+    const remaining = parseInt(localStorage.getItem("etsy_checker_count") || MAX_FREE_PER_DAY.toString());
+    localStorage.setItem("etsy_checker_count", Math.max(0, remaining - 1).toString());
+  }
+  updateRemainingDisplay();
+}
+
+async function updateRemainingDisplay() {
+  const remaining = await getRemainingToday();
+  if (remaining === Infinity) {
+    document.getElementById("remaining").innerText = "Pro - Unlimited checks";
+    document.getElementById("checkBtn").disabled = false;
+    document.getElementById("upgradeBanner").style.display = "none";
+  } else {
+    document.getElementById("remaining").innerText = `Free checks remaining: ${remaining}`;
+    if (remaining <= 0) {
+      document.getElementById("checkBtn").disabled = true;
+      document.getElementById("remaining").innerHTML = '<span class="warning">No free checks remaining today.</span>';
+      if (!currentUser || document.getElementById("userPlanBadge").innerText !== "Pro") {
+        document.getElementById("upgradeBanner").style.display = "block";
+      }
+    } else {
+      document.getElementById("checkBtn").disabled = false;
+    }
+  }
+}
 
 // ==================== TRO DATABASE ====================
 const TRO_DATABASE = {
     "disney": { active: true, lawFirm: "GBC", lastCase: "Jan 2025", note: "Disney has filed TROs frequently in the past 12 months, targeting unauthorized character prints on Etsy." },
-    "hermes": { active: true, lawFirm: "GBC", lastCase: "Mar 2025", note: "Hermes aggressively pursues Birkin/Kelly bag replicas. Typical settlement: $2,000-$10,000." },
-    "nike": { active: true, lawFirm: "GBC", lastCase: "Feb 2025", note: "Nike enforces Air Jordan, Swoosh, and sneaker design rights across platforms." },
-    "rolex": { active: true, lawFirm: "Keith", lastCase: "Jan 2025", note: "Rolex targets replica watches and listings using 'Rolex' as a keyword." },
-    "chanel": { active: true, lawFirm: "GBC", lastCase: "Apr 2025", note: "Chanel files TROs against listings featuring double-C logos, pearl elements, or quilted patterns." },
-    "louis vuitton": { active: true, lawFirm: "GBC", lastCase: "Mar 2025", note: "LV protects its monogram, checkerboard, and Speedy bag silhouette." },
-    "harry potter": { active: true, lawFirm: "Warner Bros Legal", lastCase: "Feb 2025", note: "Warner Bros. enforces Hogwarts, Gryffindor, and related Harry Potter terms." },
-    "starbucks": { active: true, lawFirm: "Starbucks Legal", lastCase: "Dec 2024", note: "Starbucks monitors the green mermaid logo and related design elements." },
-    "nintendo": { active: true, lawFirm: "Nintendo Legal", lastCase: "Jan 2025", note: "Nintendo strictly protects Pokemon, Mario, and other game character designs." }
+    "hermes": { active: true, lawFirm: "GBC", lastCase: "Mar 2025", note: "Hermes pursues Birkin/Kelly replicas. Settlement: $2,000-$10,000." },
+    "nike": { active: true, lawFirm: "GBC", lastCase: "Feb 2025", note: "Nike enforces Air Jordan and Swoosh design rights." },
+    "rolex": { active: true, lawFirm: "Keith", lastCase: "Jan 2025", note: "Rolex targets replica watches." },
+    "chanel": { active: true, lawFirm: "GBC", lastCase: "Apr 2025", note: "Chanel files TROs against double-C logos and quilted patterns." },
+    "louis vuitton": { active: true, lawFirm: "GBC", lastCase: "Mar 2025", note: "LV protects monogram and Speedy bag silhouette." },
+    "harry potter": { active: true, lawFirm: "Warner Bros Legal", lastCase: "Feb 2025", note: "Warner Bros. enforces Hogwarts and related terms." },
+    "starbucks": { active: true, lawFirm: "Starbucks Legal", lastCase: "Dec 2024", note: "Starbucks monitors the green mermaid logo." },
+    "nintendo": { active: true, lawFirm: "Nintendo Legal", lastCase: "Jan 2025", note: "Nintendo protects Pokemon and Mario designs." }
 };
 
-// ==================== FREE CHECK LIMIT ====================
-const MAX_FREE = 5;
-function getRemaining() {
-    let count = localStorage.getItem("etsy_checker_count");
-    if (count === null) { localStorage.setItem("etsy_checker_count", MAX_FREE); return MAX_FREE; }
-    return parseInt(count);
-}
-function useOne() {
-    let r = getRemaining();
-    if (r > 0) { localStorage.setItem("etsy_checker_count", r - 1); }
-    updateRemainingDisplay();
-}
-function updateRemainingDisplay() {
-    let r = getRemaining();
-    document.getElementById("remaining").innerText = `Free checks remaining: ${r}`;
-    if (r <= 0) { document.getElementById("checkBtn").disabled = true; document.getElementById("remaining").innerHTML = '<span class="warning">No free checks remaining. Contact us to upgrade.</span>'; }
-}
-
-// ==================== TRO ALERT ====================
 function checkTRO(text) {
     let alerts = [];
     text = text.toLowerCase();
@@ -86,54 +246,73 @@ function checkTRO(text) {
     }
     return alerts;
 }
+
 function renderTROAlert(alerts) {
     if (alerts.length === 0) return "";
     let html = '<div class="tro-alert"><strong>⚠️ TRO Alert: High-risk brand(s) detected</strong><ul>';
-    alerts.forEach(a => { html += `<li><b>${a.brand.toUpperCase()}</b> - Law Firm: ${a.lawFirm} | Latest Case: ${a.lastCase}<br>📌 ${a.note}</li>`; });
-    html += '</ul><p style="font-size:13px;color:#666;">Based on publicly available TRO case records. Verify independently before listing.</p></div>';
+    alerts.forEach(a => { html += `<li><b>${a.brand.toUpperCase()}</b> - Law Firm: ${a.lawFirm} | Latest: ${a.lastCase}<br>📌 ${a.note}</li>`; });
+    html += '</ul><p style="font-size:13px;color:#666;">Based on publicly available TRO case records.</p></div>';
     return html;
+}
+
+// ==================== HISTORY ====================
+async function loadHistory() {
+  if (!supabase || !currentUser) return;
+  const { data } = await supabase.from("check_history").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false }).limit(10);
+  if (data && data.length > 0) {
+    document.getElementById("historyCard").style.display = "block";
+    let html = "";
+    data.forEach(row => {
+      html += `<tr><td>${new Date(row.created_at).toLocaleDateString()}</td><td>${(row.query||"").substring(0,50)}...</td><td>${row.risk_level || "N/A"}</td></tr>`;
+    });
+    document.getElementById("historyBody").innerHTML = html;
+  }
+}
+
+async function saveHistory(query, result, riskLevel) {
+  if (!supabase || !currentUser) return;
+  await supabase.from("check_history").insert({ user_id: currentUser.id, query, result, risk_level: riskLevel });
 }
 
 // ==================== CORE CHECK ====================
 async function checkRisk() {
-    if (getRemaining() <= 0) {
-        document.getElementById("result").innerHTML = '<div class="result-box"><p class="warning">No free checks remaining.</p><p>Please wait for tomorrow or upgrade to Pro.</p></div>';
+    const remaining = await getRemainingToday();
+    if (remaining <= 0 && remaining !== Infinity) {
+        document.getElementById("result").innerHTML = '<div class="result-box"><p class="warning">No free checks remaining today.</p></div>';
+        document.getElementById("upgradeBanner").style.display = "block";
         return;
     }
     const userInput = document.getElementById("input").value.trim();
     if (!userInput) { alert("Please enter a product title or description"); return; }
-    
-    useOne();
+    await useOneCheck();
     document.getElementById("result").innerHTML = '<div class="result-box">⏳ Analyzing...</div>';
 
-    const prompt = `You are an Etsy intellectual property risk analysis expert specializing in TRO prevention.\n\nEvaluate: "${userInput}"\n\nAnalyze: 1) Trademark keywords 2) Copyrighted characters/IP 3) Brand style similarity 4) Risky language ("inspired by", "compatible with", "custom [brand]" none of which exempt from infringement).\n\nReturn STRICTLY:\nRisk Level: [LOW/MEDIUM/HIGH]\nReasons:\n- reason 1\n- reason 2\n- reason 3 (max 3)\nAdvice:\n- suggestion 1\n- suggestion 2\nTRO Risk Note: [If HIGH, note brand's TRO history. If LOW, write "N/A"]`;
+    const prompt = `You are an Etsy IP risk expert. Evaluate: "${userInput}". Return:\nRisk Level: [LOW/MEDIUM/HIGH]\nReasons:\n- reason 1\n- reason 2\n- reason 3\nAdvice:\n- suggestion 1\n- suggestion 2\nTRO Risk Note: [if HIGH, note TRO history; if LOW, write N/A]`;
 
     try {
-        const response = await fetch(API_PROXY_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "user", content: prompt }], temperature: 0.2 })
-        });
+        const response = await fetch(API_PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "user", content: prompt }], temperature: 0.2 }) });
         const data = await response.json();
-        if (!data.choices || !data.choices[0]) {
-            document.getElementById("result").innerHTML = `<div class="result-box"><p class="warning">API Error</p><pre>${JSON.stringify(data,null,2)}</pre></div>`;
-            return;
-        }
+        if (!data.choices || !data.choices[0]) { document.getElementById("result").innerHTML = `<div class="result-box"><p class="warning">API Error</p></div>`; return; }
         const aiResult = data.choices[0].message.content;
         const troAlerts = checkTRO(userInput);
         const troHTML = renderTROAlert(troAlerts);
-        
+        const riskMatch = aiResult.match(/Risk Level:\s*(HIGH|MEDIUM|LOW)/i);
+        const riskLevel = riskMatch ? riskMatch[1] : "UNKNOWN";
+        if (currentUser) { await saveHistory(userInput, aiResult, riskLevel); await loadHistory(); }
         document.getElementById("result").innerHTML = '<div class="result-box"><h3>📊 Risk Analysis</h3><pre>' + aiResult + '</pre>' + troHTML + '</div>';
         updateRemainingDisplay();
-    } catch (error) {
-        document.getElementById("result").innerHTML = `<div class="result-box"><p class="warning">Request failed: ${error.message}</p></div>`;
-    }
+    } catch (e) { document.getElementById("result").innerHTML = `<div class="result-box"><p class="warning">Request failed: ${e.message}</p></div>`; }
+}
+
+// ==================== PAYMENT ====================
+function startCheckout() {
+  LemonSqueezy.Url.Open(`https://store.lemonsqueezy.com/checkout?embed=1`);
 }
 
 // ==================== INIT ====================
 window.onload = function() {
+    initSupabase();
     updateRemainingDisplay();
-    if (getRemaining() <= 0) document.getElementById("checkBtn").disabled = true;
 };
 </script>
 
